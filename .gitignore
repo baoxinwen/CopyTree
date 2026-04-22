@@ -1,0 +1,23 @@
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Build artifacts
+build/
+dist/
+*.pyc
+__pycache__/
+
+# Requirements doc (internal)
+requirements.md
+blog_copytree.md
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
