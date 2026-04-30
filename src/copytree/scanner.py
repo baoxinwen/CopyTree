@@ -28,6 +28,7 @@ IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 class TreeEntry:
     name: str
     is_dir: bool
+    path: str | None = None
     size: int | None = None
     mtime: float | None = None
     access_denied: bool = False
@@ -54,11 +55,12 @@ def scan_directory(
     show_time: bool = False,
     max_depth: int | None = None,
     include_ext: set[str] | None = None,
+    include_names: set[str] | None = None,
 ) -> ScanResult:
     """递归扫描目录，返回 ScanResult。"""
     path = _normalize_path(path)
     name = os.path.basename(path.rstrip("/\\"))
-    root = TreeEntry(name=name, is_dir=True)
+    root = TreeEntry(name=name, is_dir=True, path=path)
 
     ctx = _ScanContext(
         exclude_dirs=exclude_dirs or set(),
@@ -68,6 +70,7 @@ def scan_directory(
         show_size=show_size,
         show_time=show_time,
         include_ext=include_ext,
+        include_names=include_names,
     )
 
     ctx._scan_children(root, path, max_depth, 0)
@@ -91,14 +94,16 @@ class _ScanContext:
         show_size: bool,
         show_time: bool,
         include_ext: set[str] | None,
+        include_names: set[str] | None,
     ):
         self.exclude_dirs = {d.lower() for d in exclude_dirs}
         self.exclude_files = {f.lower() for f in exclude_files}
         self.max_files = max_files
-        self.max_items_per_level = max_items_per_level
+        self.max_items_per_level = max(1, max_items_per_level)
         self.show_size = show_size
         self.show_time = show_time
-        self.include_ext = {e.lower() for e in include_ext} if include_ext else None
+        self.include_ext = {e.lower() for e in include_ext} if include_ext is not None else None
+        self.include_names = {n.lower() for n in include_names} if include_names is not None else None
         self.file_count = 0
         self.dir_count = 0
         self.file_count_actual = 0
@@ -125,7 +130,7 @@ class _ScanContext:
                 continue
             if not child.is_dir:
                 self.file_count_actual += 1
-                if self.file_count_actual > self.max_files:
+                if self.max_files >= 0 and self.file_count_actual > self.max_files:
                     self.truncated = True
                     continue
             entries.append(child)
@@ -149,11 +154,11 @@ class _ScanContext:
             if child.is_marker:
                 continue
             if child.is_dir:
-                child_path = os.path.join(path, child.name)
+                child_path = child.path or os.path.join(path, child.name)
                 self._scan_children(child, child_path, max_depth, depth + 1)
 
         # 扩展名过滤模式下，移除不含匹配文件的空目录
-        if self.include_ext:
+        if self.include_ext is not None or self.include_names is not None:
             filtered = []
             for child in entry.children:
                 if child.is_marker:
@@ -161,6 +166,7 @@ class _ScanContext:
                 elif child.is_dir:
                     if child.children or child.access_denied:
                         filtered.append(child)
+                        self.dir_count += 1
                     # 无子项的目录静默移除
                 else:
                     filtered.append(child)
@@ -216,16 +222,19 @@ class _ScanContext:
             if name.lower() in self.exclude_files:
                 return None
             # 扩展名过滤：只显示指定类型的文件
-            if self.include_ext:
+            if self.include_ext is not None or self.include_names is not None:
                 _, ext = os.path.splitext(name)
-                if ext.lower() not in self.include_ext:
+                name_matches = self.include_names is not None and name.lower() in self.include_names
+                ext_matches = self.include_ext is not None and ext.lower() in self.include_ext
+                if not name_matches and not ext_matches:
                     return None
 
-        # 文件名截断
-        if len(name) > MAX_NAME_LENGTH:
-            name = name[: MAX_NAME_LENGTH - 3] + "..."
+        # 文件名截断只影响显示，递归仍使用 DirEntry 的真实路径。
+        display_name = name
+        if len(display_name) > MAX_NAME_LENGTH:
+            display_name = display_name[: MAX_NAME_LENGTH - 3] + "..."
 
-        entry = TreeEntry(name=name, is_dir=is_dir)
+        entry = TreeEntry(name=display_name, is_dir=is_dir, path=item.path)
 
         # 获取文件大小
         if not is_dir and self.show_size:
@@ -248,7 +257,10 @@ def _normalize_path(path: str) -> str:
     """标准化路径，超长路径加 \\\\?\\ 前缀。"""
     path = os.path.normpath(path)
     if len(path) > 248 and not path.startswith("\\\\?\\"):
-        path = "\\\\?\\" + path
+        if path.startswith("\\\\"):
+            path = "\\\\?\\UNC\\" + path.lstrip("\\")
+        else:
+            path = "\\\\?\\" + path
     return path
 
 

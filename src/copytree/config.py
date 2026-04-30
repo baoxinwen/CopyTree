@@ -73,10 +73,35 @@ def get_effective_config(cli_overrides: dict | None = None) -> dict:
 
 
 def _merge(config: dict, user: dict, key: str, expected_type: type):
-    if key in user and isinstance(user[key], expected_type):
-        if expected_type is int and isinstance(user[key], bool):
+    if key not in user:
+        return
+
+    value = user[key]
+    if expected_type is list:
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            config[key] = value
+        return
+
+    if expected_type is int:
+        if isinstance(value, bool) or not isinstance(value, int):
             return
-        config[key] = user[key]
+        if key in ("maxFiles", "maxDepth") and value < -1:
+            return
+        if key == "maxItemsPerLevel" and value < 1:
+            return
+        config[key] = value
+        return
+
+    if expected_type is bool:
+        if isinstance(value, bool):
+            config[key] = value
+        return
+
+    if expected_type is str:
+        if isinstance(value, str):
+            if key == "defaultFormat" and value not in ("text", "markdown"):
+                return
+            config[key] = value
 
 
 def ensure_config_file() -> str:
@@ -108,8 +133,8 @@ def ensure_config_file() -> str:
 
 def open_config_file() -> bool:
     """创建默认配置文件（如不存在）并用记事本打开。"""
-    path = ensure_config_file()
     try:
+        path = ensure_config_file()
         os.startfile(path)
         return True
     except OSError:

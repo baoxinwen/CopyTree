@@ -20,9 +20,9 @@
 - **完整目录树** — 默认显示所有文件，可选过滤 `.git`、`node_modules` 等指定目录
 - **多种输出格式** — 纯文本、Markdown 代码块
 - **文件大小 & 修改时间** — 可选显示文件大小和最后修改日期
-- **按后缀筛选** — 通过配置文件自定义文件扩展名过滤（默认 70+ 种源码扩展名）
+- **按后缀/源码筛选** — 通过配置文件自定义扩展名过滤；源码模式额外识别 `Dockerfile`、`Makefile` 等无扩展名文件
 - **深度限制** — 控制显示层级，如只看 2 层
-- **保存到文件** — 导出为 `directory_tree.txt` 或 `directory_tree.md`
+- **保存到文件** — 导出为 `directory_tree.txt` 或 `directory_tree.md`，生成文件会在下次扫描时自动排除
 - **配置文件** — 支持自定义排除列表、后缀筛选、默认格式、显示限制等
 - **双击即装** — 下载 exe 后双击自动注册右键菜单
 - **零依赖** — 纯 Python + ctypes，不依赖任何第三方库
@@ -127,6 +127,17 @@ python -m PyInstaller copytree.spec --noconfirm
 
 构建产物在 `dist/CopyTree.exe`，双击运行安装。
 
+### GitHub 自动构建
+
+仓库包含 GitHub Actions 构建流程：推送代码后会在 Windows 环境自动运行 PyInstaller，并把 `CopyTree.exe` 保存为 Actions artifact。
+
+如果推送的是 `v*` 格式的标签（例如 `v1.0.1`），工作流还会自动创建或更新对应 Release，并上传 `CopyTree.exe`：
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
 ## 卸载
 
 在命令行运行：
@@ -160,7 +171,7 @@ CopyTree.exe "C:\path\to\folder" --format markdown
 # 按配置文件中 filterExt 筛选
 CopyTree.exe "C:\path\to\folder" --filter-ext
 
-# 仅源码文件（内置 70+ 扩展名列表）
+# 仅源码文件（内置 70+ 扩展名列表，并识别 Dockerfile/Makefile 等文件名）
 CopyTree.exe "C:\path\to\folder" --source-only
 
 # 限制深度为 2 层
@@ -206,6 +217,12 @@ CopyTree.exe --version
 }
 ```
 
+说明：
+
+- `maxFiles` / `maxDepth` 设为 `-1` 表示不限制。
+- `directory_tree.txt` 和 `directory_tree.md` 会自动排除，避免保存后再次扫描时被写入树中。
+- `--source-only` 使用内置源码扩展名列表，并额外匹配常见无扩展名源码/构建文件名。
+
 ## 项目结构
 
 ```
@@ -230,8 +247,8 @@ src/copytree/
 - **通知** — `Shell_NotifyIconW` 气泡通知，后台线程 + 主线程等待确保显示
 - **快捷方式** — COM 接口 `IShellLinkW` + `IPropertyStore`，设置 AppUserModelID
 - **右键菜单** — `MUIVerb` + `SubCommands` 实现级联子菜单，`CommandFlags=0x20` 添加分隔线，注册在 `HKCU` 下无需管理员权限
-- **目录扫描** — `os.scandir` 递归，自动识别 Junction/符号链接、长路径 `\\?\` 前缀、权限拒绝目录
-- **打包** — PyInstaller `--noconsole`，通过 `AttachConsole(-1)` 在命令行模式下仍可输出
+- **目录扫描** — `os.scandir` 递归，自动识别 Junction/符号链接、长路径 `\\?\` / `\\?\UNC\` 前缀、权限拒绝目录
+- **打包** — PyInstaller `--noconsole`，命令行模式优先使用继承的 stdout/stderr 句柄，必要时回退到 `AttachConsole(-1)`
 
 ## 许可证
 

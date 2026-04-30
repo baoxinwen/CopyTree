@@ -9,6 +9,21 @@ from .constants import APP_ID, SHORTCUT_DIR, SHORTCUT_NAME
 
 ole32 = ctypes.windll.ole32
 
+ole32.IIDFromString.restype = HRESULT
+ole32.IIDFromString.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p]
+ole32.CoInitializeEx.restype = HRESULT
+ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.wintypes.DWORD]
+ole32.CoUninitialize.restype = None
+ole32.CoUninitialize.argtypes = []
+ole32.CoCreateInstance.restype = HRESULT
+ole32.CoCreateInstance.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.wintypes.DWORD,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+]
+
 
 class GUID(ctypes.Structure):
     _fields_ = [
@@ -21,6 +36,16 @@ class GUID(ctypes.Structure):
 
 class PROPERTYKEY(ctypes.Structure):
     _fields_ = [("fmtid", GUID), ("pid", ctypes.c_ulong)]
+
+
+class PROPVARIANT(ctypes.Structure):
+    _fields_ = [
+        ("vt", ctypes.c_ushort),
+        ("wReserved1", ctypes.c_ushort),
+        ("wReserved2", ctypes.c_ushort),
+        ("wReserved3", ctypes.c_ushort),
+        ("p", ctypes.c_void_p),
+    ]
 
 
 # ── 接口 GUID ──
@@ -70,19 +95,26 @@ def create_start_menu_shortcut(exe_path: str) -> bool:
 
         # QueryInterface -> IPropertyStore
         ps_ptr = c_void_p()
-        _vtcall(ptr, 0, POINTER(GUID), POINTER(c_void_p))(
-            ptr.value, byref(IID_IPropertyStore), byref(ps_ptr)
-        )
-        if ps_ptr.value:
-            # IPropertyStore::SetValue (slot 5)
-            pv = _make_lpWSTR(APP_ID)
-            _vtcall(ps_ptr, 5, POINTER(PROPERTYKEY), ctypes.c_void_p)(
-                ps_ptr.value, byref(PKEY_AppUserModelID), pv
+        try:
+            _vtcall(ptr, 0, POINTER(GUID), POINTER(c_void_p))(
+                ptr.value, byref(IID_IPropertyStore), byref(ps_ptr)
             )
-            # IPropertyStore::Commit (slot 6)
-            _vtcall(ps_ptr, 6)(ps_ptr.value)
-            # IPropertyStore::Release (slot 2)
-            _vtcall(ps_ptr, 2)(ps_ptr.value)
+        except OSError:
+            ps_ptr = c_void_p()
+        if ps_ptr.value:
+            try:
+                # IPropertyStore::SetValue (slot 6)
+                pv, _pv_text = _make_lpWSTR(APP_ID)
+                _vtcall(ps_ptr, 6, POINTER(PROPERTYKEY), POINTER(PROPVARIANT))(
+                    ps_ptr.value, byref(PKEY_AppUserModelID), byref(pv)
+                )
+                # IPropertyStore::Commit (slot 7)
+                _vtcall(ps_ptr, 7)(ps_ptr.value)
+            except OSError:
+                pass
+            finally:
+                # IPropertyStore::Release (slot 2)
+                _vtcall(ps_ptr, 2)(ps_ptr.value)
 
         # QueryInterface -> IPersistFile
         pf_ptr = c_void_p()
@@ -115,16 +147,10 @@ def remove_start_menu_shortcut() -> bool:
         return False
 
 
-def _make_lpWSTR(value: str) -> ctypes.c_void_p:
+def _make_lpWSTR(value: str) -> tuple[PROPVARIANT, ctypes.Array]:
     """构造一个 VT_LPWSTR (31) PROPVARIANT。简化版：只设置 vt 和指针。"""
-    # PROPVARIANT layout (16 bytes on x64):
-    #   vt: USHORT (2 bytes)
-    #   padding: 6 bytes
-    #   union data: 8 bytes (pointer for VT_LPWSTR)
-    buf = ctypes.create_string_buffer(16)
-    vt = ctypes.c_ushort(31)  # VT_LPWSTR
-    ctypes.memmove(buf, ctypes.addressof(vt), 2)
     wstr = ctypes.create_unicode_buffer(value)
-    ptr = ctypes.c_void_p(ctypes.addressof(wstr))
-    ctypes.memmove(ctypes.addressof(buf) + 8, ctypes.addressof(ptr), ctypes.sizeof(ptr))
-    return ctypes.cast(buf, ctypes.c_void_p)
+    pv = PROPVARIANT()
+    pv.vt = 31  # VT_LPWSTR
+    pv.p = ctypes.cast(wstr, ctypes.c_void_p)
+    return pv, wstr

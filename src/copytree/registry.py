@@ -4,7 +4,6 @@ import os
 import winreg
 
 from .constants import APP_ID
-from .notify import show_notification
 from .shortcut import create_start_menu_shortcut, remove_start_menu_shortcut
 
 # 子菜单项定义：(注册表子键名, 菜单文字, 命令行参数后缀, 是否在此项前加分隔线)
@@ -45,7 +44,8 @@ def install(exe_path: str) -> bool:
             arg_param = r'"%V"' if is_background else r'"%1"'
             _write_submenu(root, exe_path, arg_param)
 
-        create_start_menu_shortcut(exe_path)
+        if not create_start_menu_shortcut(exe_path):
+            return False
         _register_aumid(exe_path)
         return True
     except OSError:

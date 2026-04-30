@@ -7,8 +7,29 @@ import threading
 user32 = ctypes.windll.user32
 shell32 = ctypes.windll.shell32
 
+user32.CreateWindowExW.restype = ctypes.wintypes.HWND
+user32.CreateWindowExW.argtypes = [
+    ctypes.wintypes.DWORD,
+    ctypes.c_wchar_p,
+    ctypes.c_wchar_p,
+    ctypes.wintypes.DWORD,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.wintypes.HWND,
+    ctypes.wintypes.HMENU,
+    ctypes.wintypes.HINSTANCE,
+    ctypes.c_void_p,
+]
+user32.DestroyWindow.restype = ctypes.wintypes.BOOL
+user32.DestroyWindow.argtypes = [ctypes.wintypes.HWND]
+user32.LoadIconW.restype = ctypes.wintypes.HICON
+user32.LoadIconW.argtypes = [ctypes.wintypes.HINSTANCE, ctypes.c_void_p]
 shell32.Shell_NotifyIconW.restype = ctypes.wintypes.BOOL
 shell32.Shell_NotifyIconW.argtypes = [ctypes.wintypes.DWORD, ctypes.c_void_p]
+
+IDI_INFORMATION = 32516
 
 
 class NOTIFYICONDATAW(ctypes.Structure):
@@ -52,13 +73,13 @@ def _show_balloon(title: str, body: str, timeout: float):
     import time
 
     hwnd = user32.CreateWindowExW(
-        0x80, ctypes.c_wchar_p("STATIC"), "", 0,
-        0, 0, 0, 0, 0, 0, 0, None,
+        0x80, "STATIC", "", 0,
+        0, 0, 0, 0, None, None, None, None,
     )
     if not hwnd:
         return
 
-    icon = user32.LoadIconW(0, 32514)  # IDI_INFORMATION
+    icon = user32.LoadIconW(None, ctypes.c_void_p(IDI_INFORMATION))
 
     nid = NOTIFYICONDATAW()
     nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)

@@ -62,6 +62,7 @@ def _write_clipboard(text: str) -> bool:
     user32.CloseClipboard()
 
     if not result:
+        kernel32.GlobalFree(h_mem)
         return False
 
     return True

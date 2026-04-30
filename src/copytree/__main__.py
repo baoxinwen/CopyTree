@@ -2,17 +2,24 @@
 
 import argparse
 import ctypes
+import ctypes.wintypes
+import msvcrt
 import os
 import sys
 
 from .clipboard import copy_to_clipboard
 from .config import get_effective_config
 from .constants import (
+    DEFAULT_OUTPUT_FILENAME_MD,
+    DEFAULT_OUTPUT_FILENAME_TXT,
+    GENERATED_OUTPUT_FILENAMES,
     MSG_INSTALLED,
     MSG_NOTIFY_FAIL,
     MSG_NOTIFY_SUCCESS,
     MSG_NOTIFY_SUCCESS_TRUNCATED,
     MSG_UNINSTALLED,
+    SOURCE_CODE_EXTENSIONS,
+    SOURCE_CODE_FILENAMES,
 )
 from .formatter import format_output
 from .notify import show_notification, wait_notification
@@ -20,24 +27,73 @@ from .registry import install, uninstall
 from .scanner import build_tree_text, scan_directory
 
 
+ATTACH_PARENT_PROCESS = 0xFFFFFFFF
+STD_OUTPUT_HANDLE = 0xFFFFFFF5
+STD_ERROR_HANDLE = 0xFFFFFFF4
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+FILE_TYPE_UNKNOWN = 0
+_stdio_ready = False
+
+kernel32 = ctypes.windll.kernel32
+kernel32.GetConsoleWindow.restype = ctypes.wintypes.HWND
+kernel32.GetConsoleWindow.argtypes = []
+kernel32.GetStdHandle.restype = ctypes.wintypes.HANDLE
+kernel32.GetStdHandle.argtypes = [ctypes.wintypes.DWORD]
+kernel32.GetFileType.restype = ctypes.wintypes.DWORD
+kernel32.GetFileType.argtypes = [ctypes.wintypes.HANDLE]
+kernel32.AttachConsole.restype = ctypes.wintypes.BOOL
+kernel32.AttachConsole.argtypes = [ctypes.wintypes.DWORD]
+
+
 def _has_console() -> bool:
     """检测当前进程是否拥有控制台。"""
     try:
-        return ctypes.windll.kernel32.GetConsoleWindow() != 0
+        return kernel32.GetConsoleWindow() != 0
     except Exception:
         return False
 
 
-def _attach_parent_console():
+def _attach_parent_console() -> bool:
     """附加到父进程的控制台（用于 console=False 构建）。"""
-    kernel32 = ctypes.windll.kernel32
-    if kernel32.GetConsoleWindow() == 0:
-        try:
-            if kernel32.AttachConsole(-1):  # ATTACH_PARENT_PROCESS
-                sys.stdout = open("CONOUT$", "w", encoding="utf-8", closefd=False)
-                sys.stderr = open("CONERR$", "w", encoding="utf-8", closefd=False)
-        except Exception:
-            pass
+    global _stdio_ready
+    if _stdio_ready:
+        return True
+    if _has_console():
+        _stdio_ready = True
+        return True
+    stdout = _open_std_stream(STD_OUTPUT_HANDLE)
+    stderr = _open_std_stream(STD_ERROR_HANDLE)
+    if stdout or stderr:
+        if stdout:
+            sys.stdout = stdout
+        if stderr:
+            sys.stderr = stderr
+        _stdio_ready = True
+        return True
+    try:
+        if kernel32.AttachConsole(ATTACH_PARENT_PROCESS):
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", closefd=False)
+            sys.stderr = open("CONERR$", "w", encoding="utf-8", closefd=False)
+            _stdio_ready = True
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _open_std_stream(handle_id: int):
+    """打开继承的 stdout/stderr 句柄，支持重定向和测试捕获。"""
+    try:
+        handle = kernel32.GetStdHandle(handle_id)
+        handle_value = getattr(handle, "value", handle)
+        if not handle_value or handle_value == INVALID_HANDLE_VALUE:
+            return None
+        if kernel32.GetFileType(handle) == FILE_TYPE_UNKNOWN:
+            return None
+        fd = msvcrt.open_osfhandle(handle_value, os.O_TEXT)
+        return open(fd, "w", encoding="utf-8", buffering=1, closefd=False)
+    except Exception:
+        return None
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -91,6 +147,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    _attach_parent_console()
     parser = _build_arg_parser()
     args = parser.parse_args()
 
@@ -167,6 +224,7 @@ def main():
     for name in args.exclude:
         exclude_dirs.add(name)
         exclude_files.add(name)
+    exclude_files.update(GENERATED_OUTPUT_FILENAMES)
 
     # 深度：CLI 参数 > 配置文件 > 无限制
     max_depth = args.max_depth if args.max_depth is not None else config.get("maxDepth", -1)
@@ -177,9 +235,10 @@ def main():
 
     # 扩展名过滤
     include_ext = None
+    include_names = None
     if args.source_only:
-        from .constants import SOURCE_CODE_EXTENSIONS
         include_ext = SOURCE_CODE_EXTENSIONS
+        include_names = SOURCE_CODE_FILENAMES
     elif args.filter_ext:
         include_ext = set(config.get("filterExt", []))
 
@@ -194,6 +253,7 @@ def main():
         show_time=show_time,
         max_depth=max_depth,
         include_ext=include_ext,
+        include_names=include_names,
     )
 
     tree_text = build_tree_text(result, show_size=show_size, show_time=show_time)
@@ -202,13 +262,11 @@ def main():
     # 保存到文件
     if args.save or args.save_md:
         if args.save_md:
-            from .constants import DEFAULT_OUTPUT_FILENAME_MD
             save_path = os.path.join(target, DEFAULT_OUTPUT_FILENAME_MD)
             save_content = format_output(tree_text, "markdown")
         else:
-            from .constants import DEFAULT_OUTPUT_FILENAME_TXT
             save_path = os.path.join(target, DEFAULT_OUTPUT_FILENAME_TXT)
-            save_content = output
+            save_content = tree_text
         try:
             with open(save_path, "w", encoding="utf-8") as f:
                 f.write(save_content)
@@ -260,8 +318,7 @@ def _get_exe_path() -> str:
 def _print(msg: str):
     """安全输出到 stdout。"""
     try:
-        if _has_console():
-            _attach_parent_console()
+        _attach_parent_console()
         if sys.stdout:
             print(msg)
     except Exception:
@@ -271,6 +328,7 @@ def _print(msg: str):
 def _print_err(msg: str):
     """安全输出到 stderr。"""
     try:
+        _attach_parent_console()
         if sys.stderr:
             print(msg, file=sys.stderr)
     except Exception:

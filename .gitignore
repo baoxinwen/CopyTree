@@ -1,12 +1,32 @@
-# Claude Code
+# Local AI assistant context
 .claude/
 CLAUDE.md
+AGENTS.md
 
 # Build artifacts
 build/
 dist/
 *.pyc
 __pycache__/
+
+# Local tests / coverage artifacts
+tests/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/build.yml
+.pytest_cache/
+.coverage
+htmlcov/
+test_runtime*/
+review_*/
+py_probe*/
+version_probe.*
+
+# Local Python environments
+.venv/
+venv/
+env/
 
 # Requirements doc (internal)
 requirements.md

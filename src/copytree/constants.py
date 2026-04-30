@@ -49,9 +49,20 @@ SOURCE_CODE_EXTENSIONS = frozenset({
     ".wasm",
 })
 
+# ── 无扩展名但常见的源码/构建配置文件 ──
+SOURCE_CODE_FILENAMES = frozenset({
+    "dockerfile", "makefile", "gnumakefile",
+    "cmakelists.txt", "justfile", "rakefile",
+    "gemfile", "podfile", "procfile", "vagrantfile",
+})
+
 # ── 默认输出文件名 ──
 DEFAULT_OUTPUT_FILENAME_TXT = "directory_tree.txt"
 DEFAULT_OUTPUT_FILENAME_MD = "directory_tree.md"
+GENERATED_OUTPUT_FILENAMES = frozenset({
+    DEFAULT_OUTPUT_FILENAME_TXT,
+    DEFAULT_OUTPUT_FILENAME_MD,
+})
 
 # ── 树状符号 ──
 BRANCH = "\u251C\u2500\u2500 "     # ├──
@@ -62,15 +73,7 @@ FOLDER_PREFIX = "\U0001F4C1 "      # 📁
 LOCK_PREFIX = "\U0001F512 "        # 🔒
 
 # ── 文件属性（Windows）──
-FILE_ATTRIBUTE_HIDDEN = 0x2
 FILE_ATTRIBUTE_SYSTEM = 0x4
-
-# ── 注册表路径 ──
-HKCU = "HKEY_CURRENT_USER"
-REG_KEY_DIR = r"Software\Classes\Directory\shell\CopyTree"
-REG_KEY_BG = r"Software\Classes\Directory\Background\shell\CopyTree"
-REG_KEY_DIR_SIZE = r"Software\Classes\Directory\shell\CopyTree.WithSize"
-REG_KEY_BG_SIZE = r"Software\Classes\Directory\Background\shell\CopyTree.WithSize"
 
 # ── 快捷方式路径 ──
 SHORTCUT_DIR = os.path.join(
@@ -84,8 +87,6 @@ CONFIG_DIR = os.path.join(os.environ.get("APPDATA", ""), "CopyTree")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "copytree.json")
 
 # ── UI 字符串 ──
-MSG_MENU_LABEL = "复制目录树"
-MSG_MENU_LABEL_SIZE = "复制目录树（含大小）"
 MSG_INSTALLED = "CopyTree 已就绪，右键文件夹即可使用"
 MSG_UNINSTALLED = "CopyTree 已卸载"
 MSG_NOTIFY_SUCCESS = "已复制目录树：{files} 个文件，{dirs} 个文件夹"
