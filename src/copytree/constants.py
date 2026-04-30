@@ -3,7 +3,7 @@
 import os
 
 # ── 版本 ──
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # ── AppUserModelID ──
 APP_ID = "CopyTree.CopyTree"
