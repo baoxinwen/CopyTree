@@ -1,0 +1,44 @@
+# Local AI assistant context
+.claude/
+CLAUDE.md
+AGENTS.md
+
+# Build artifacts
+build/
+dist/
+*.pyc
+__pycache__/
+
+# Local tests / coverage artifacts
+test/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/build.yml
+.pytest_cache/
+.coverage
+htmlcov/
+test_runtime*/
+review_*/
+py_probe*/
+*_probe.*
+cli_noargs.txt
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Requirements doc (internal)
+requirements.md
+blog_copytree.md
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
