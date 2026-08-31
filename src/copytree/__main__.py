@@ -9,7 +9,9 @@ import os
 import shutil
 import sys
 
-from .clipboard import copy_to_clipboard
+from loguru import logger
+
+from .clipboard import copy_to_clipboard, get_last_failure_stage
 from .config import get_config_warnings, get_effective_config
 from .constants import (
     CONFIG_FILE,
@@ -29,9 +31,10 @@ from .constants import (
     VERSION,
 )
 from .formatter import format_output
+from .logging_setup import setup_logging
 from .notify import show_notification, wait_notification
 from .registry import get_installed_exe_path, install, uninstall
-from .scanner import _normalize_path, build_tree_text, describe_truncation, scan_directory
+from .scanner import build_tree_text, describe_truncation, normalize_path, scan_directory
 from .winapi import (
     ATTACH_PARENT_PROCESS,
     FILE_TYPE_CHAR,
@@ -269,6 +272,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="仅显示配置文件中 filterExt 指定后缀的文件"
     )
     parser.add_argument(
+        "--gitignore", action="store_true", dest="gitignore",
+        help="遵循目录中的 .gitignore 规则过滤"
+    )
+    parser.add_argument(
         "--save", action="store_true", help="保存到目标目录下的 directory_tree.txt"
     )
     parser.add_argument(
@@ -312,21 +319,43 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="store_true", help="显示版本号"
     )
-    parser.add_argument(
-        "--notify",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
+    if not cli_executable:
+        # --notify 是右键菜单注入给 CopyTree.exe 的隐藏参数；
+        # CLI 入口不注册它，避免脚本误用后被静默吞掉 stdout。
+        parser.add_argument(
+            "--notify",
+            action="store_true",
+            help=argparse.SUPPRESS,
+        )
     return parser
 
 
 def main():
-    parser = _build_arg_parser()
-    args = parser.parse_args()
     global _force_notify_mode
-    _force_notify_mode = args.notify
+    # --help 和参数错误会在 parse_args 内部经 _ArgumentParser.exit 进入 _exit 记日志，
+    # 日志初始化必须先于参数解析；--notify 是右键菜单注入的隐藏参数，
+    # 直接扫 argv 判定，避免模式检测依赖解析结果。
+    _force_notify_mode = "--notify" in sys.argv[1:]
     if not _force_notify_mode:
         _attach_parent_console()
+    setup_logging(enable_stderr=_is_cli_mode())
+    logger.info(
+        "启动 mode={} notify_force={} argv={}",
+        "CLI" if _is_cli_mode() else "GUI",
+        _force_notify_mode,
+        " ".join(sys.argv),
+    )
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    if _is_cli_executable() and (args.install or args.uninstall or args.config):
+        logger.warning(
+            "CLI 入口收到安装类参数 install={} uninstall={} config={}，已拒绝",
+            args.install, args.uninstall, args.config,
+        )
+        _print_err("安装、卸载和打开配置请使用 CopyTree.exe。CopyTreeCLI.exe 仅用于命令行复制/输出。")
+        _pause_if_double_clicked_cli()
+        _exit(1)
 
     if args.version:
         _print(f"{_program_display_name()} {VERSION}")
@@ -335,11 +364,6 @@ def main():
     if _is_no_args_mode(args):
         _handle_no_args(parser)
         return
-
-    if _is_cli_executable() and (args.install or args.uninstall or args.config):
-        _print_err("安装、卸载和打开配置请使用 CopyTree.exe。CopyTreeCLI.exe 仅用于命令行复制/输出。")
-        _pause_if_double_clicked_cli()
-        _exit(1)
 
     if args.install:
         _handle_install()
@@ -417,12 +441,23 @@ def _handle_directory_scan(args, parser):
         _exit(1)
 
     target = os.path.abspath(args.path)
-    scan_target = _normalize_path(target)
+    scan_target = normalize_path(target)
     if not os.path.isdir(scan_target):
-        _print_err(f"'{target}' 不是有效的目录")
+        logger.warning("目标目录无效: {}", target)
+        if _is_cli_mode():
+            _print_err(f"'{target}' 不是有效的目录")
+        else:
+            _notify(f"目录无效：{target}")
         _exit(1)
 
     config, config_warnings, show_size, show_time = _merge_scan_config(args)
+    logger.info(
+        "扫描 {} maxFiles={} maxItemsPerLevel={} maxDepth={} filter={} source_only={} filter_ext={} exclude={}",
+        target, config["maxFiles"], config["maxItemsPerLevel"],
+        args.max_depth if args.max_depth is not None else config.get("maxDepth"),
+        args.apply_filter, args.source_only, args.filter_ext,
+        list(args.exclude) or "无",
+    )
     result = _execute_scan(scan_target, config, args, show_size, show_time)
     output, save_display_path = _format_and_save(
         scan_target, target, result, config, args, show_size, show_time
@@ -438,25 +473,30 @@ def _merge_scan_config(args):
     config = get_effective_config(cli_overrides or None)
     config_warnings = get_config_warnings()
     show_size = args.size or config.get("showFileSize", False)
-    show_time = args.time
+    show_time = args.time or config.get("showFileTime", False)
     return config, config_warnings, show_size, show_time
 
 
 def _execute_scan(target, config, args, show_size, show_time):
     exclude_dirs, exclude_files = _build_exclude_sets(args, config)
+    # excludePatterns 与 excludeDirs 同生命周期：仅在主动启用过滤时生效
+    exclude_patterns = set(config.get("excludePatterns") or []) if args.apply_filter else set()
     max_depth = _resolve_max_depth(args, config)
     include_ext, include_names = _resolve_include_filters(args, config)
+    respect_gitignore = args.gitignore or config.get("respectGitignore", False)
     prune_empty_dirs = (
         args.apply_filter
         or bool(args.exclude)
         or args.source_only
         or args.filter_ext
+        or respect_gitignore
     )
 
     return scan_directory(
         path=target,
         exclude_dirs=exclude_dirs,
         exclude_files=exclude_files,
+        exclude_patterns=exclude_patterns or None,
         max_files=config["maxFiles"],
         max_items_per_level=config["maxItemsPerLevel"],
         show_size=show_size,
@@ -465,6 +505,7 @@ def _execute_scan(target, config, args, show_size, show_time):
         include_ext=include_ext,
         include_names=include_names,
         prune_empty_dirs=prune_empty_dirs,
+        respect_gitignore=respect_gitignore,
     )
 
 
@@ -542,10 +583,12 @@ def _save_to_file(target, tree_text, result, args, show_size, show_time):
 def _copy_and_output(result, output, args, config_warnings, save_display_path=""):
     copied_to_clipboard = not args.no_clipboard
     if copied_to_clipboard and not copy_to_clipboard(output):
+        reason = "内存不足，无法写入剪贴板" if get_last_failure_stage() == "memory" else "剪贴板被占用"
+        logger.error("剪贴板写入失败（重试后仍失败），输出长度 {} 字符", len(output))
         if not _is_cli_mode():
-            _notify(MSG_NOTIFY_FAIL.format(error="剪贴板被占用"))
+            _notify(MSG_NOTIFY_FAIL.format(error=reason))
         else:
-            _print_err("复制失败：剪贴板被占用")
+            _print_err(f"复制失败：{reason}")
         _exit(2)
 
     if not _is_cli_mode():
@@ -555,6 +598,11 @@ def _copy_and_output(result, output, args, config_warnings, save_display_path=""
         _print_config_warnings(config_warnings)
         _print(output)
 
+    logger.info(
+        "复制完成 files={} dirs={} truncated={} clipboard={} saved={}",
+        result.total_files, result.total_dirs, result.truncated,
+        copied_to_clipboard, save_display_path or "无",
+    )
     _exit(0)
 
 
@@ -597,8 +645,10 @@ def _check_config():
     get_effective_config()
     warnings = get_config_warnings()
     if not warnings:
+        logger.info("配置检查通过 {}", CONFIG_FILE)
         _print(f"配置检查通过：{CONFIG_FILE}")
         return
+    logger.warning("配置检查发现 {} 项警告", len(warnings))
     _print(f"配置检查发现 {len(warnings)} 项警告：")
     for warning in warnings:
         _print(f"- {warning}")
@@ -819,6 +869,7 @@ def _confirm_uninstall() -> bool:
 
 
 def _report_setup_status(msg: str):
+    logger.info("安装状态反馈: {}", msg)
     if _is_cli_executable():
         _print(msg)
     else:
@@ -973,11 +1024,15 @@ def _notify(msg: str):
 
 
 def _exit(code: int = 0):
-    """等待通知完成后退出进程。"""
+    """等待通知完成后退出进程。所有退出路径的唯一出口，便于统一审计。"""
     try:
         wait_notification()
     except RuntimeError:
         pass
+    if code:
+        logger.warning("进程退出 code={}", code)
+    else:
+        logger.info("进程正常退出")
     sys.exit(code)
 
 
