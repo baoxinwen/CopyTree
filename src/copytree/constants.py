@@ -94,6 +94,10 @@ SHORTCUT_NAME = "CopyTree.lnk"
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", ""), "CopyTree")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "copytree.json")
 
+# ── 日志路径 ──
+LOG_DIR = os.path.join(CONFIG_DIR, "logs")
+LOG_FILE = os.path.join(LOG_DIR, "copytree.log")
+
 # ── UI 字符串 ──
 MSG_INSTALLED = "CopyTree 已就绪，右键文件夹即可使用"
 MSG_UNINSTALLED = "CopyTree 已卸载"
