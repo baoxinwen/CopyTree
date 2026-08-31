@@ -18,34 +18,44 @@
 
 - **右键菜单集成** — 13 种操作一键完成，分组显示
 - **完整目录树** — 可选过滤 `.git`、`node_modules` 等目录
-- **多种输出格式** — 纯文本、Markdown 代码块、Markdown 列表、JSON
+- **多种输出格式** — 纯文本、Markdown 代码块、Markdown 列表、JSON、路径列表、文件名列表、统计摘要
 - **文件信息** — 可选显示文件大小和修改时间
 - **后缀/源码筛选** — 自定义扩展名过滤，源码模式识别 `Dockerfile`、`Makefile` 等
+- **glob / .gitignore 过滤** — `excludePatterns` 通配符排除；一键遵循 `.gitignore`
 - **深度限制** — 控制显示层级
-- **保存到文件** — 导出为 txt 或 Markdown
+- **保存到文件** — 导出为 txt、Markdown 或 JSON
 - **配置文件** — 自定义排除列表、默认格式、显示限制等
+- **拖拽窗口** — 双击已装副本打开窗口，批量拖入文件夹复制；可选驻留托盘
 - **双击管理** — 双击 exe 即可安装、更新、修复或卸载
 - **零依赖** — 纯 Python + ctypes
 
 ## 右键菜单
 
 ```
-复制目录树
-复制目录树（过滤指定目录）
-复制目录树（含大小）
-复制目录树（含修改时间）
-复制目录树（仅指定后缀文件）
-复制目录树（限2层）
+📋 复制目录树                ← 顶层直出，一步复制
 ─────────────────────
-复制为 Markdown
-复制为 Markdown（含大小）
-复制为 Markdown 列表
-复制为 JSON
+📝 CopyTree 格式 ▸
+   📝 复制为 Markdown
+   📑 复制为 Markdown 列表
+   🧾 复制为 JSON
+   📄 复制路径列表
+   🔤 复制文件名列表
+   📊 复制统计摘要
 ─────────────────────
-保存为 txt
-保存为 Markdown
+⚙️ CopyTree 选项 ▸
+   📂 复制（隐藏 .git 等目录）
+   🙈 复制（遵循 .gitignore）
+   🏷️ 复制（仅指定后缀）
+   🌲 复制（限 2 层）
+   📏 复制（含文件大小）
+   🕒 复制（含修改时间）
+   📝 复制为 Markdown（含大小）
 ─────────────────────
-打开配置文件
+💾 CopyTree 保存与配置 ▸
+   💾 保存为 txt
+   💾 保存为 Markdown
+   💾 保存为 JSON
+   🔧 打开配置文件
 ```
 
 ## 输出示例
@@ -74,7 +84,7 @@
 ```bash
 git clone https://github.com/baoxinwen/CopyTree.git
 cd CopyTree
-pip install pyinstaller
+pip install -r requirements.txt
 python -m PyInstaller copytree.spec --noconfirm
 ```
 
@@ -89,8 +99,12 @@ CopyTreeCLI.exe "C:\path\to\folder"                    # 基本用法
 CopyTreeCLI.exe "C:\path\to\folder" --filter            # 过滤 .git 等
 CopyTreeCLI.exe "C:\path\to\folder" --size               # 含文件大小
 CopyTreeCLI.exe "C:\path\to\folder" --format json        # JSON 格式
+CopyTreeCLI.exe "C:\path\to\folder" --format paths       # 路径列表
+CopyTreeCLI.exe "C:\path\to\folder" --format summary     # 统计摘要
 CopyTreeCLI.exe "C:\path\to\folder" --max-depth 2        # 限 2 层
+CopyTreeCLI.exe "C:\path\to\folder" --gitignore          # 遵循 .gitignore
 CopyTreeCLI.exe "C:\path\to\folder" --save               # 保存为 txt
+CopyTreeCLI.exe "C:\path\to\folder" --save-json          # 保存为 JSON
 CopyTreeCLI.exe "C:\path\to\folder" --no-clipboard       # 只输出不复制
 CopyTreeCLI.exe --check-config                           # 检查配置
 CopyTreeCLI.exe --version                                # 查看版本
@@ -98,12 +112,13 @@ CopyTreeCLI.exe --version                                # 查看版本
 
 ## 配置文件
 
-首次使用「打开配置文件」时自动生成 `%APPDATA%\CopyTree\copytree.json`：
+首次使用「打开配置文件」时自动生成 `%APPDATA%\CopyTree\copytree.json`。以下为示意（节选），实际生成的 `filterExt` 默认包含全部内置源码扩展名（`.py`、`.js`、`.md`、`.txt` 等 70+ 项）：
 
 ```json
 {
   "excludeDirs": [".git", "node_modules", "__pycache__"],
   "excludeFiles": [".DS_Store", "Thumbs.db"],
+  "excludePatterns": ["*.min.js", "dist/*"],
   "maxFiles": 2000,
   "maxItemsPerLevel": 200,
   "maxDepth": -1,
@@ -118,6 +133,20 @@ CopyTreeCLI.exe --version                                # 查看版本
 | `maxFiles` | -1 ~ 1000000 | 最大文件数，-1 不限制 |
 | `maxItemsPerLevel` | 1 ~ 10000 | 单层级最大项数 |
 | `maxDepth` | -1 ~ 100 | 显示深度，-1 不限制 |
+| `excludePatterns` | 字符串列表 | 通配符排除，匹配名称或相对路径，仅在过滤模式下生效 |
+| `showFileTime` | true/false | 默认显示修改时间 |
+| `respectGitignore` | true/false | 扫描时遵循 `.gitignore` |
+| `enableTray` | true/false | 拖拽窗口关闭时驻留托盘（默认 false，不常驻后台） |
+
+## 拖拽窗口
+
+双击已安装的 `CopyTree.exe`（版本一致时）会打开拖拽窗口：把一个或多个文件夹拖进窗口，按所选格式和过滤选项扫描并复制到剪贴板。窗口内还可以保存为 txt、打开配置文件或卸载 CopyTree。勾选「关闭时驻留托盘」后，关闭窗口仅最小化到系统托盘，双击托盘图标可再次打开。
+
+## 日志
+
+运行日志写入 `%APPDATA%\CopyTree\logs\copytree.log`：DEBUG 级全量记录，2MB 轮转、保留 5 份。
+CLI 场景下 WARNING 及以上同时输出到 stderr；**stdout 始终只输出目录树数据**，脚本管道不受影响。
+日志仅包含路径与统计信息，不记录文件内容或剪贴板文本。
 
 ## 项目结构
 
@@ -130,9 +159,12 @@ src/copytree/
 ├── natural_sort.py    # 自然排序（file2 < file10）
 ├── config.py          # 配置文件加载与生成
 ├── scanner.py         # 目录扫描、过滤、树状文本生成
-├── formatter.py       # 输出格式化（文本 / Markdown / JSON）
+├── gitignore.py       # .gitignore 解析与匹配
+├── formatter.py       # 输出格式化（文本 / Markdown / JSON / 路径 / 摘要）
 ├── clipboard.py       # Win32 剪贴板操作
 ├── notify.py          # 系统气泡通知
+├── window.py          # 拖拽窗口（tkinter + WM_DROPFILES）
+├── tray.py            # 可选托盘图标（默认关闭）
 ├── shortcut.py        # 开始菜单快捷方式（COM 接口）
 └── registry.py        # 注册表右键菜单管理
 ```
