@@ -4,6 +4,8 @@ import ctypes
 import ctypes.wintypes
 import threading
 
+from loguru import logger
+
 user32 = ctypes.windll.user32
 shell32 = ctypes.windll.shell32
 
@@ -82,7 +84,11 @@ def show_notification(title: str, body: str, timeout: float = 3.0) -> bool:
     t.start()
     with _notify_lock:
         _notify_thread = t
-    ready.wait(timeout=1.0)
+    ready.wait(timeout=5.0)
+    if status["ok"]:
+        logger.debug("气泡通知已弹出 title={}", title)
+    else:
+        logger.warning("气泡通知未确认显示（初始化失败或超时）")
     return status["ok"]
 
 
@@ -92,6 +98,11 @@ def wait_notification():
         thread = _notify_thread
     if thread is not None:
         thread.join(timeout=5.0)
+
+
+def _truncate_utf16(text: str, max_units: int) -> str:
+    """按 UTF-16 编码单元数截断字符串，保证能存入定长 wchar 数组（含 null）。"""
+    return text.encode("utf-16-le")[: max_units * 2].decode("utf-16-le", errors="ignore")
 
 
 def _show_balloon(
@@ -122,9 +133,11 @@ def _show_balloon(
         nid.uFlags = NIF_ICON | NIF_TIP | NIF_INFO
         nid.hIcon = icon
         nid.szTip = "CopyTree"
-        # Shell_NotifyIconW 的 szInfoTitle 限 64 字符、szInfo 限 256 字符（含 null）
-        nid.szInfoTitle = title[:63]
-        nid.szInfo = body[:255]
+        # Shell_NotifyIconW 的 szInfoTitle 限 64 字符、szInfo 限 256 字符（含 null）。
+        # 按 UTF-16 编码单元截断：码点截断遇增补平面字符（emoji 等）会超出
+        # c_wchar 定长数组容量，赋值抛 ValueError 后整条通知被吞掉。
+        nid.szInfoTitle = _truncate_utf16(title, 63)
+        nid.szInfo = _truncate_utf16(body, 255)
         nid.dwInfoFlags = NIIF_INFO
 
         if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
@@ -135,6 +148,11 @@ def _show_balloon(
         time.sleep(timeout)
 
         shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+    except Exception:
+        # 后台线程里的任何失败都不能静默吞掉：记录后按失败返回，
+        # 否则线程死亡时调用方只会看到超时假阴性。
+        logger.exception("气泡通知线程异常")
+        status["ok"] = False
     finally:
         if not ready.is_set():
             ready.set()
