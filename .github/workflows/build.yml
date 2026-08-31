@@ -71,8 +71,10 @@ jobs:
       - name: Generate release notes
         shell: pwsh
         run: |
+          $version = (Select-String -Path src/copytree/__init__.py -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $releaseName = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF_NAME } else { "v$version" }
           @"
-          ## CopyTree v1.0.0
+          ## CopyTree $releaseName
 
           CopyTree 是一个 Windows 目录树复制工具，支持资源管理器右键菜单和独立命令行入口。
 
@@ -132,7 +134,15 @@ jobs:
             if ($statusCode -ne 404) {
               throw
             }
-            $release = Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/json" -Uri "$apiBase/releases" -Body $payload
+            # /releases/tags 不返回 draft；存在同名草稿时改为 Patch，避免创建时撞 422
+            $draft = Invoke-RestMethod -Headers $headers -Uri "$apiBase/releases?per_page=100" |
+              Where-Object { $_.draft -and $_.tag_name -eq $tag } |
+              Select-Object -First 1
+            if ($draft) {
+              $release = Invoke-RestMethod -Method Patch -Headers $headers -ContentType "application/json" -Uri "$apiBase/releases/$($draft.id)" -Body $payload
+            } else {
+              $release = Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/json" -Uri "$apiBase/releases" -Body $payload
+            }
           }
 
           foreach ($assetPath in @("dist/CopyTree.exe", "dist/CopyTreeCLI.exe", "dist/SHA256SUMS.txt")) {
