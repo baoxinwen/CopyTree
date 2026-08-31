@@ -76,6 +76,9 @@ LOCK_PREFIX = "\U0001F512 "        # 🔒
 
 # ── 文件属性（Windows）──
 FILE_ATTRIBUTE_SYSTEM = 0x4
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+# Junction 的 reparse tag（不是 symlink，显示为文件条目且不递归）
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 
 # ── 快捷方式路径 ──
 INSTALL_DIR = os.path.join(

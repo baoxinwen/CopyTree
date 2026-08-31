@@ -4,8 +4,17 @@ import datetime
 import json
 import os
 
+from loguru import logger
+
 from .constants import FOLDER_PREFIX, LOCK_PREFIX, MSG_NO_ACCESS
-from .scanner import ScanResult, TreeEntry, _build_suffix, describe_truncation
+from .scanner import (
+    ScanResult,
+    TreeEntry,
+    _format_size,
+    build_suffix,
+    describe_truncation,
+    strip_long_prefix,
+)
 
 def format_text(tree_text: str) -> str:
     """返回原始树状文本。"""
@@ -106,7 +115,7 @@ def _render_markdown_entry(
         lines.append(prefix + entry.name)
         return
 
-    suffix = _build_suffix(entry, show_size, show_time)
+    suffix = build_suffix(entry, show_size, show_time)
     if entry.is_dir:
         if entry.access_denied:
             lines.append(f"{prefix}{LOCK_PREFIX}{entry.name}/ ({MSG_NO_ACCESS})")

@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 import unittest
@@ -12,7 +13,11 @@ from copytree.constants import (  # noqa: E402
     SOURCE_CODE_EXTENSIONS,
     SOURCE_CODE_FILENAMES,
 )
-from copytree.scanner import build_tree_text, describe_truncation, _normalize_path, _root_display_name, scan_directory  # noqa: E402
+from copytree.scanner import build_tree_text, describe_truncation, normalize_path, _root_display_name, scan_directory  # noqa: E402
+
+from loguru import logger as _quiet_logger  # noqa: E402
+
+_quiet_logger.remove()  # 保持测试输出干净
 
 
 class ScannerTests(unittest.TestCase):
@@ -153,14 +158,14 @@ class ScannerTests(unittest.TestCase):
     def test_long_unc_path_uses_unc_prefix(self):
         path = "\\\\server\\share\\" + ("a" * 260)
 
-        normalized = _normalize_path(path)
+        normalized = normalize_path(path)
 
         self.assertTrue(normalized.startswith("\\\\?\\UNC\\server\\share\\"))
 
     def test_long_relative_path_is_made_absolute_before_prefix(self):
         path = "a" * 260
 
-        normalized = _normalize_path(path)
+        normalized = normalize_path(path)
 
         self.assertTrue(normalized.startswith("\\\\?\\"))
         self.assertTrue(Path(normalized[4:]).is_absolute())
@@ -195,6 +200,37 @@ class ScannerTests(unittest.TestCase):
         self.assertFalse(result_neg.truncated)
         self.assertEqual(result_neg.total_files, result_zero.total_files)
         self.assertEqual(result_neg.total_dirs, result_zero.total_dirs)
+
+    def test_generic_oserror_marks_directory_locked(self):
+        real_scandir = os.scandir
+        calls = {"n": 0}
+
+        def flaky(path):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return real_scandir(path)
+            raise OSError(5, "generic failure")
+
+        (self.tmp / "x").mkdir()
+
+        with mock.patch("copytree.scanner.os.scandir", flaky):
+            result = scan_directory(str(self.tmp), max_files=-1)
+
+        self.assertEqual(result.total_dirs, 1)
+        self.assertTrue(result.root.children[0].access_denied)
+
+    def test_depth_guard_scales_with_recursion_limit(self):
+        # 回归：阈值必须按“每层约 2 个栈帧”折算，否则默认递归限制下
+        # 保护不会先于 RecursionError 触发（历史缺陷，~500 层即崩溃）。
+        current = self.tmp
+        for i in range(120):
+            current = current / f"d{i}"
+            current.mkdir()
+
+        with mock.patch("copytree.scanner.sys.getrecursionlimit", return_value=300):
+            result = scan_directory(str(self.tmp), max_files=-1)
+
+        self.assertTrue(result.depth_limited)
 
 
 if __name__ == "__main__":
