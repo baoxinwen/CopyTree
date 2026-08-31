@@ -94,6 +94,7 @@ SHORTCUT_DIR = os.path.join(
     "Microsoft", "Windows", "Start Menu", "Programs",
 )
 SHORTCUT_NAME = "CopyTree.lnk"
+SHORTCUT_UNINSTALL_NAME = "卸载 CopyTree.lnk"
 
 # ── 配置文件路径 ──
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", ""), "CopyTree")

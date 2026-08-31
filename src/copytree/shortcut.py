@@ -5,7 +5,9 @@ import ctypes.wintypes
 import os
 from ctypes import HRESULT, POINTER, byref, c_void_p
 
-from .constants import APP_ID, SHORTCUT_DIR, SHORTCUT_NAME
+from loguru import logger
+
+from .constants import APP_ID, SHORTCUT_DIR, SHORTCUT_NAME, SHORTCUT_UNINSTALL_NAME
 
 ole32 = ctypes.windll.ole32
 
@@ -45,6 +47,9 @@ class PROPVARIANT(ctypes.Structure):
         ("wReserved2", ctypes.c_ushort),
         ("wReserved3", ctypes.c_ushort),
         ("p", ctypes.c_void_p),
+        # 对齐真实 PROPVARIANT 的 x64 尺寸（含 DECIMAL 联合的剩余部分），
+        # 当前仅使用指针成员，但保持结构尺寸与系统一致更安全。
+        ("__union_rest", ctypes.c_ubyte * 8),
     ]
 
 
@@ -66,13 +71,17 @@ PKEY_AppUserModelID.pid = 5
 
 # ── COM vtable slot 偏移量 ──
 # 以下偏移量基于 Windows 10 SDK (10.0.19041) 的 COM 接口定义。
-# IShellLinkW 继承链: IUnknown(3) + IShellLink(17) → SetPath 在 slot 20。
+# IShellLinkW vtable: IUnknown(3) + GetPath(3) GetIDList(4) SetIDList(5) GetDescription(6)
+# SetDescription(7) GetWorkingDirectory(8) SetWorkingDirectory(9) GetArguments(10) SetArguments(11)
+# GetHotkey(12) SetHotkey(13) GetShowCmd(14) SetShowCmd(15) GetIconLocation(16) SetIconLocation(17)
+# SetRelativePath(18) Resolve(19) SetPath(20)。
 # IPersistFile 是独立接口(通过 QueryInterface 获取): IUnknown(3) 后 Save 在 slot 6。
 # IPropertyStore 是独立接口(通过 QueryInterface 获取): IUnknown(3) 后 SetValue 在 slot 6, Commit 在 slot 7。
 # 若需支持其他 Windows 版本，应使用 comtypes 或 win32com 替代手动 vtable 调用。
 _IUNKNOWN_QUERY_INTERFACE = 0
 _IUNKNOWN_RELEASE = 2
 _ISHELLLINKW_SET_PATH = 20
+_ISHELLLINKW_SET_ARGUMENTS = 11
 _IPERSISTFILE_SAVE = 6
 _IPROPERTYSTORE_SET_VALUE = 6
 _IPROPERTYSTORE_COMMIT = 7
@@ -80,6 +89,7 @@ _IPROPERTYSTORE_COMMIT = 7
 # COM 线程模型常量
 COINIT_APARTMENTTHREADED = 0x2
 CLSCTX_INPROC_SERVER = 1
+RPC_E_CHANGED_MODE = -2147417850  # 0x80010106
 
 
 # vtable 调用辅助
@@ -92,14 +102,20 @@ def _vtcall(obj_ptr, slot, *arg_types):
     )
 
 
-def create_start_menu_shortcut(exe_path: str) -> bool:
-    """在 Start Menu 创建快捷方式并设置 AppUserModelID。"""
-    shortcut_path = os.path.join(SHORTCUT_DIR, SHORTCUT_NAME)
+def create_start_menu_shortcut(
+    exe_path: str,
+    arguments: str = "",
+    shortcut_name: str = SHORTCUT_NAME,
+) -> bool:
+    """在 Start Menu 创建快捷方式并设置 AppUserModelID，可附带启动参数。"""
+    shortcut_path = os.path.join(SHORTCUT_DIR, shortcut_name)
     os.makedirs(SHORTCUT_DIR, exist_ok=True)
 
     coinit_hr = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-    if coinit_hr < 0:  # FAILED(hr)
+    if coinit_hr < 0 and coinit_hr != RPC_E_CHANGED_MODE:  # FAILED(hr)；套间已被他处初始化时仍可继续
+        logger.error("CoInitializeEx 失败 hr=0x{:08X}", coinit_hr & 0xFFFFFFFF)
         return False
+    initialized_here = coinit_hr >= 0  # 仅本次调用真正初始化成功时才需要配对 CoUninitialize
     try:
         # CoCreateInstance -> IShellLinkW
         ptr = c_void_p()
@@ -115,17 +131,26 @@ def create_start_menu_shortcut(exe_path: str) -> bool:
             _vtcall(ptr, _IUNKNOWN_RELEASE)(ptr.value)
             return False
 
+        if arguments:
+            args_hr = _vtcall(ptr, _ISHELLLINKW_SET_ARGUMENTS, ctypes.c_wchar_p)(ptr.value, arguments)
+            if args_hr != 0:
+                _vtcall(ptr, _IUNKNOWN_RELEASE)(ptr.value)
+                return False
+
         _try_set_app_user_model_id(ptr)
 
         try:
             _save_shortcut(ptr, shortcut_path)
         finally:
             _vtcall(ptr, _IUNKNOWN_RELEASE)(ptr.value)
+        logger.info("开始菜单快捷方式已创建 {}", shortcut_path)
         return True
     except Exception:
+        logger.exception("创建快捷方式失败 path={}", exe_path)
         return False
     finally:
-        ole32.CoUninitialize()
+        if initialized_here:
+            ole32.CoUninitialize()
 
 
 def _try_set_app_user_model_id(shell_link_ptr):
@@ -170,14 +195,17 @@ def _save_shortcut(shell_link_ptr, shortcut_path: str):
 
 
 def remove_start_menu_shortcut() -> bool:
-    """删除 Start Menu 快捷方式。"""
-    shortcut_path = os.path.join(SHORTCUT_DIR, SHORTCUT_NAME)
-    try:
-        if os.path.exists(shortcut_path):
-            os.remove(shortcut_path)
-        return True
-    except OSError:
-        return False
+    """删除 Start Menu 快捷方式（含「卸载 CopyTree」）。"""
+    ok = True
+    for name in (SHORTCUT_NAME, SHORTCUT_UNINSTALL_NAME):
+        shortcut_path = os.path.join(SHORTCUT_DIR, name)
+        try:
+            if os.path.exists(shortcut_path):
+                os.remove(shortcut_path)
+        except OSError:
+            logger.exception("删除快捷方式失败 {}", shortcut_path)
+            ok = False
+    return ok
 
 
 def _make_lpWSTR(value: str) -> tuple[PROPVARIANT, ctypes.Array]:
