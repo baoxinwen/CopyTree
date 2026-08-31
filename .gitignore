@@ -42,3 +42,4 @@ blog_copytree.md
 .DS_Store
 Thumbs.db
 desktop.ini
+.zcode/
