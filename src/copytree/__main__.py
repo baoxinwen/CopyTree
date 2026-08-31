@@ -34,7 +34,14 @@ from .constants import (
 from .formatter import format_output
 from .logging_setup import setup_logging
 from .notify import show_notification, wait_notification
-from .registry import get_installed_exe_path, install, uninstall
+from .registry import (
+    get_installed_exe_path,
+    get_installed_version,
+    get_registered_command,
+    install,
+    is_registered,
+    uninstall,
+)
 from .scanner import build_tree_text, describe_truncation, normalize_path, scan_directory
 from .winapi import (
     ATTACH_PARENT_PROCESS,
@@ -59,6 +66,7 @@ from .winapi import (
 _SETUP_ACTION_CANCEL = 0
 _SETUP_ACTION_INSTALL = 1
 _SETUP_ACTION_UNINSTALL = 2
+_SETUP_ACTION_UPTODATE = 3
 _stdio_ready = False
 _parent_process_name: str | None = None
 _parent_process_names: list[str] | None = None
@@ -702,9 +710,35 @@ def _check_config():
 def _manage_install_from_gui():
     source_exe_path = _get_exe_path()
     installed_exe_path = get_installed_exe_path()
+    logger.debug("安装管理入口 source='{}' registered_target='{}'", source_exe_path, installed_exe_path)
 
     if installed_exe_path:
         action = _choose_installed_action(source_exe_path, installed_exe_path)
+        if action == _SETUP_ACTION_CANCEL:
+            _exit(0)
+        if action == _SETUP_ACTION_UPTODATE:
+            # 同版本双击不弹任何询问：直接打开拖拽窗口；
+            # 卸载入口在窗口内和开始菜单「卸载 CopyTree」快捷方式
+            logger.info("已安装同版本 {}，打开拖拽窗口", get_installed_version())
+            from .window import run_drop_window
+
+            run_drop_window()
+            _exit(0)
+        if action == _SETUP_ACTION_UNINSTALL:
+            _uninstall_from_gui(installed_exe_path)
+            return
+        if _install_from_source(source_exe_path):
+            _notify(MSG_INSTALLED)
+        else:
+            _notify("安装失败")
+            _exit(3)
+        return
+
+    if is_registered():
+        # 菜单键已注册但命令无法解析出主程序路径：按残留菜单提供修复/卸载，
+        # 而不是把它当成未安装直接走全新安装确认。
+        logger.warning("菜单已注册但命令无法解析，进入残留修复分支")
+        action = _choose_repair_or_uninstall(get_registered_command() or "(无法解析)")
         if action == _SETUP_ACTION_CANCEL:
             _exit(0)
         if action == _SETUP_ACTION_UNINSTALL:
@@ -729,6 +763,18 @@ def _manage_install_from_gui():
 def _choose_installed_action(source_exe_path: str, installed_exe_path: str) -> int:
     registered_stable_copy = _same_path(installed_exe_path, INSTALL_EXE)
     running_registered_copy = _same_path(source_exe_path, installed_exe_path)
+    installed_version = get_installed_version()
+
+    # 优先按注册表版本判断，免去每次双击的全量字节比对；
+    # 注册表无版本值（旧版安装后未重装）时退回原有 filecmp 比对逻辑
+    if installed_version and registered_stable_copy:
+        if installed_version == VERSION:
+            # 同版本：只轻提示不弹窗；卸载入口收敛到开始菜单「卸载 CopyTree」
+            return _SETUP_ACTION_UPTODATE
+        if os.path.isfile(INSTALL_EXE):
+            return _choose_update_or_uninstall(source_exe_path, INSTALL_EXE, installed_version)
+        return _choose_repair_or_uninstall(INSTALL_EXE)
+
     if registered_stable_copy and running_registered_copy:
         return _SETUP_ACTION_UNINSTALL if _confirm_uninstall() else _SETUP_ACTION_CANCEL
 
@@ -746,9 +792,11 @@ def _choose_installed_action(source_exe_path: str, installed_exe_path: str) -> i
 
 def _uninstall_from_gui(installed_exe_path: str):
     if uninstall():
+        logger.info("GUI 卸载完成 registered_target='{}'", installed_exe_path or "(未解析)")
         _cleanup_installed_files(installed_exe_path)
         _notify(MSG_UNINSTALLED)
     else:
+        logger.error("GUI 卸载失败：注册表键仍残留")
         _notify("卸载失败")
         _exit(3)
 
@@ -756,36 +804,62 @@ def _uninstall_from_gui(installed_exe_path: str):
 def _install_from_source(source_exe_path: str) -> bool:
     target_exe_path = _prepare_installed_files(source_exe_path)
     if not target_exe_path:
+        logger.error("安装中止：稳定副本准备失败 source='{}'", source_exe_path)
         return False
-    return install(target_exe_path)
+    result = install(target_exe_path)
+    logger.info("注册右键菜单 target='{}' result={}", target_exe_path, "成功" if result else "失败")
+    return result
 
 
 def _prepare_installed_files(source_exe_path: str) -> str:
-    """准备稳定安装副本，避免右键菜单依赖下载目录里的 exe。"""
+    """准备稳定安装副本，避免右键菜单依赖下载目录里的 exe。
+
+    先复制到同目录暂存文件、全部就绪后再原子替换；
+    任一步失败只清理暂存文件并保留旧稳定副本，
+    避免更新半途失败把本来可用的右键菜单变成悬空注册。
+    """
     source_exe_path = os.path.abspath(source_exe_path)
     if not getattr(sys, "frozen", False):
         return source_exe_path
     if not source_exe_path or not os.path.isfile(source_exe_path):
         return ""
+    staged_gui = ""
+    staged_cli = ""
     try:
         os.makedirs(INSTALL_DIR, exist_ok=True)
-        _copy_if_needed(source_exe_path, INSTALL_EXE)
+        staged_gui = _stage_file(source_exe_path, INSTALL_EXE)
         source_cli_path = os.path.join(os.path.dirname(source_exe_path), "CopyTreeCLI.exe")
         if os.path.isfile(source_cli_path):
-            _copy_if_needed(source_cli_path, INSTALL_CLI_EXE)
+            staged_cli = _stage_file(source_cli_path, INSTALL_CLI_EXE)
         elif os.path.exists(INSTALL_CLI_EXE):
             _delete_or_schedule_file(INSTALL_CLI_EXE)
+        logger.debug(
+            "暂存完成 gui='{}' cli='{}'",
+            staged_gui or "(同文件跳过)", staged_cli or "(无需更新)",
+        )
+        if staged_gui:
+            os.replace(staged_gui, INSTALL_EXE)
+            staged_gui = ""
+        if staged_cli:
+            os.replace(staged_cli, INSTALL_CLI_EXE)
+            staged_cli = ""
         return INSTALL_EXE
     except (OSError, shutil.Error):
-        _delete_or_schedule_file(INSTALL_EXE)
-        _delete_or_schedule_file(INSTALL_CLI_EXE)
+        # 只清理尚未替换成功的暂存文件；已就位的旧稳定副本保持不动
+        logger.error("准备稳定安装副本失败，保留旧副本 gui_staged='{}' cli_staged='{}'",
+                     staged_gui or "-", staged_cli or "-")
+        _delete_or_schedule_file(staged_gui)
+        _delete_or_schedule_file(staged_cli)
         return ""
 
 
-def _copy_if_needed(source_path: str, target_path: str):
+def _stage_file(source_path: str, target_path: str) -> str:
+    """把源文件复制到目标同目录的暂存名，返回暂存路径；同一文件时返回空串表示无需替换。"""
     if _same_path(source_path, target_path):
-        return
-    shutil.copy2(source_path, target_path)
+        return ""
+    staged_path = target_path + ".new"
+    shutil.copy2(source_path, staged_path)
+    return staged_path
 
 
 def _files_match(left: str, right: str) -> bool:
@@ -841,32 +915,32 @@ def _same_path(left: str, right: str) -> bool:
     return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
 
 
+def _show_question_box(text: str, buttons: int) -> int:
+    """统一的问题对话框入口；返回 IDYES / IDNO / IDCANCEL。"""
+    return user32.MessageBoxW(None, text, "CopyTree", buttons | MB_ICONQUESTION)
+
+
 def _confirm_install() -> bool:
-    result = user32.MessageBoxW(
-        None,
+    result = _show_question_box(
         f"是否安装 CopyTree 右键菜单？\n\n程序会安装到：\n{INSTALL_EXE}",
-        "CopyTree",
-        MB_YESNO | MB_ICONQUESTION,
+        MB_YESNO,
     )
     return result == IDYES
 
 
 def _choose_uninstall_or_keep(installed_path: str) -> int:
-    result = user32.MessageBoxW(
-        None,
+    result = _show_question_box(
         f"CopyTree 已安装，右键菜单可直接使用。\n\n安装位置：\n{installed_path}\n\n是否卸载 CopyTree？",
-        "CopyTree",
-        MB_YESNO | MB_ICONQUESTION,
+        MB_YESNO,
     )
     return _SETUP_ACTION_UNINSTALL if result == IDYES else _SETUP_ACTION_CANCEL
 
 
-def _choose_update_or_uninstall(source_path: str, target_path: str) -> int:
-    result = user32.MessageBoxW(
-        None,
-        f"CopyTree 已安装，且当前文件与安装副本不同。\n\n请选择操作：\n是：使用当前文件更新安装副本\n否：卸载 CopyTree\n取消：不做更改\n\n当前文件：\n{source_path}\n\n安装位置：\n{target_path}",
-        "CopyTree",
-        MB_YESNOCANCEL | MB_ICONQUESTION,
+def _choose_update_or_uninstall(source_path: str, target_path: str, installed_version: str = "") -> int:
+    version_note = f"（当前 v{installed_version} → 新版 v{VERSION}）" if installed_version else ""
+    result = _show_question_box(
+        f"检测到新版 CopyTree{version_note}。\n\n请选择操作：\n是：使用当前文件更新安装副本\n否：卸载 CopyTree\n取消：不做更改\n\n当前文件：\n{source_path}\n\n安装位置：\n{target_path}",
+        MB_YESNOCANCEL,
     )
     if result == IDYES:
         return _SETUP_ACTION_INSTALL
@@ -876,11 +950,9 @@ def _choose_update_or_uninstall(source_path: str, target_path: str) -> int:
 
 
 def _choose_migrate_or_uninstall(old_path: str, new_path: str) -> int:
-    result = user32.MessageBoxW(
-        None,
+    result = _show_question_box(
         f"检测到 CopyTree 使用旧安装路径：\n{old_path}\n\n请选择操作：\n是：迁移到稳定安装位置\n否：卸载 CopyTree\n取消：不做更改\n\n新的安装位置：\n{new_path}",
-        "CopyTree",
-        MB_YESNOCANCEL | MB_ICONQUESTION,
+        MB_YESNOCANCEL,
     )
     if result == IDYES:
         return _SETUP_ACTION_INSTALL
@@ -890,11 +962,9 @@ def _choose_migrate_or_uninstall(old_path: str, new_path: str) -> int:
 
 
 def _choose_repair_or_uninstall(registered_path: str) -> int:
-    result = user32.MessageBoxW(
-        None,
+    result = _show_question_box(
         f"CopyTree 的右键菜单已注册，但目标程序不存在或不可用：\n{registered_path}\n\n请选择操作：\n是：使用当前文件修复安装\n否：卸载残留的右键菜单\n取消：不做更改\n\n新的安装位置：\n{INSTALL_EXE}",
-        "CopyTree",
-        MB_YESNOCANCEL | MB_ICONQUESTION,
+        MB_YESNOCANCEL,
     )
     if result == IDYES:
         return _SETUP_ACTION_INSTALL
@@ -904,11 +974,9 @@ def _choose_repair_or_uninstall(registered_path: str) -> int:
 
 
 def _confirm_uninstall() -> bool:
-    result = user32.MessageBoxW(
-        None,
+    result = _show_question_box(
         "CopyTree 已安装。是否卸载右键菜单并移除本机安装副本？",
-        "CopyTree",
-        MB_YESNO | MB_ICONQUESTION,
+        MB_YESNO,
     )
     return result == IDYES
 
@@ -1070,10 +1138,7 @@ def _notify(msg: str):
 
 def _exit(code: int = 0):
     """等待通知完成后退出进程。所有退出路径的唯一出口，便于统一审计。"""
-    try:
-        wait_notification()
-    except RuntimeError:
-        pass
+    wait_notification()
     if code:
         logger.warning("进程退出 code={}", code)
     else:
