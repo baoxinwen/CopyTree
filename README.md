@@ -16,7 +16,7 @@
 
 ## 功能特性
 
-- **右键菜单集成** — 13 种操作一键完成，分组显示
+- **右键菜单集成** — 18 项操作：一键复制顶层直出，格式 / 选项 / 保存三个级联分组
 - **完整目录树** — 可选过滤 `.git`、`node_modules` 等目录
 - **多种输出格式** — 纯文本、Markdown 代码块、Markdown 列表、JSON、路径列表、文件名列表、统计摘要
 - **文件信息** — 可选显示文件大小和修改时间
@@ -27,7 +27,7 @@
 - **配置文件** — 自定义排除列表、默认格式、显示限制等
 - **拖拽窗口** — 双击已装副本打开窗口，批量拖入文件夹复制；可选驻留托盘
 - **双击管理** — 双击 exe 即可安装、更新、修复或卸载
-- **零依赖** — 纯 Python + ctypes
+- **轻依赖** — 运行时仅依赖 loguru，其余为 Python 标准库 + ctypes
 
 ## 右键菜单
 
@@ -77,7 +77,7 @@
 
 从 [Releases](../../releases) 下载 `CopyTree.exe`，**双击运行**即可完成安装。
 
-安装后自动复制到 `%LOCALAPPDATA%\CopyTree\`，右键菜单指向该稳定路径。再次双击可更新或卸载。
+安装后自动复制到 `%LOCALAPPDATA%\CopyTree\`，右键菜单指向该稳定路径。再次双击已安装副本会打开拖拽窗口；用新版 exe 双击可更新，卸载入口在拖拽窗口和开始菜单的「卸载 CopyTree」快捷方式。
 
 ### 从源码构建
 
@@ -124,6 +124,9 @@ CopyTreeCLI.exe --version                                # 查看版本
   "maxDepth": -1,
   "defaultFormat": "text",
   "showFileSize": false,
+  "showFileTime": false,
+  "respectGitignore": false,
+  "enableTray": false,
   "filterExt": [".py", ".js", ".ts", ".html", ".css"]
 }
 ```
@@ -163,6 +166,7 @@ src/copytree/
 ├── formatter.py       # 输出格式化（文本 / Markdown / JSON / 路径 / 摘要）
 ├── clipboard.py       # Win32 剪贴板操作
 ├── notify.py          # 系统气泡通知
+├── logging_setup.py   # 集中日志配置（loguru）
 ├── window.py          # 拖拽窗口（tkinter + WM_DROPFILES）
 ├── tray.py            # 可选托盘图标（默认关闭）
 ├── shortcut.py        # 开始菜单快捷方式（COM 接口）
