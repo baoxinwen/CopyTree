@@ -14,6 +14,7 @@ from .constants import (
     MAX_ITEMS_PER_LEVEL,
     SOURCE_CODE_EXTENSIONS,
 )
+from .formatter import VALID_FORMATS
 
 _DEFAULTS = {
     "excludeDirs": list(DEFAULT_EXCLUDE_DIRS),
@@ -30,7 +31,7 @@ _DEFAULTS = {
     "filterExt": sorted(SOURCE_CODE_EXTENSIONS),
 }
 
-VALID_FORMATS = ("text", "markdown", "markdown-list", "json")
+VALID_FORMATS  # 由 formatter._FORMATTERS 派生，此处仅再导出保持原引用路径可用
 _CONFIG_WARNINGS: list[str] = []  # 非线程安全，当前仅单线程使用
 
 _COMMENTS = {
@@ -41,7 +42,7 @@ _COMMENTS = {
     "__maxFiles说明": "最大显示文件总数。超过此数量会截断并在末尾提示。设为 -1 表示不限制。",
     "__maxItemsPerLevel说明": "同一层级（同一个文件夹内）最大显示项数。超过此数量会在该层级截断。",
     "__maxDepth说明": "默认显示深度。-1 表示不限制（显示全部层级），0 表示仅显示根目录，2 表示只显示 2 层。右键菜单有快捷选项。",
-    "__defaultFormat说明": "默认输出格式。可选：\"text\"（纯文本）、\"markdown\"（Markdown 代码块）、\"markdown-list\"（Markdown 列表）、\"json\"（结构化 JSON）。",
+    "__defaultFormat说明": "默认输出格式。可选：\"text\"（纯文本）、\"markdown\"（Markdown 代码块）、\"markdown-list\"（Markdown 列表）、\"json\"（结构化 JSON）、\"paths\"（路径列表）、\"names\"（文件名列表）、\"summary\"（统计摘要）。",
     "__showFileSize说明": "是否默认显示文件大小。true 显示，false 不显示。右键菜单有专门的「含大小」选项。",
     "__showFileTime说明": "是否默认显示修改时间。true 显示，false 不显示。右键菜单有专门的「含修改时间」选项。",
     "__respectGitignore说明": "扫描时是否遵循目录中的 .gitignore 规则过滤。true 遵循，false 忽略。右键菜单有专门的「遵循 .gitignore」选项。",

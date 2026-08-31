@@ -15,6 +15,7 @@ from .clipboard import copy_to_clipboard, get_last_failure_stage
 from .config import get_config_warnings, get_effective_config
 from .constants import (
     CONFIG_FILE,
+    DEFAULT_OUTPUT_FILENAME_JSON,
     DEFAULT_OUTPUT_FILENAME_MD,
     DEFAULT_OUTPUT_FILENAME_TXT,
     GENERATED_OUTPUT_FILENAMES,
@@ -252,9 +253,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time", action="store_true", help="显示修改时间")
     parser.add_argument(
         "--format",
-        choices=["text", "markdown", "markdown-list", "json"],
+        choices=["text", "markdown", "markdown-list", "json", "paths", "names", "summary"],
         dest="fmt",
-        help="输出格式：text、markdown、markdown-list 或 json",
+        help="输出格式：text、markdown、markdown-list、json、paths、names 或 summary",
     )
     parser.add_argument(
         "--filter", action="store_true", dest="apply_filter",
@@ -281,6 +282,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--save-md", action="store_true", dest="save_md",
         help="保存到目标目录下的 directory_tree.md"
+    )
+    parser.add_argument(
+        "--save-json", action="store_true", dest="save_json",
+        help="保存到目标目录下的 directory_tree.json"
     )
     parser.add_argument(
         "--max-depth", type=int, default=None, help="限制显示深度（0 = 仅根目录）"
@@ -543,41 +548,81 @@ def _resolve_include_filters(args, config):
 
 def _format_and_save(target, display_target, result, config, args, show_size, show_time):
     tree_text = build_tree_text(result, show_size=show_size, show_time=show_time)
+    default_format = config.get("defaultFormat", "text")
     output = format_output(
         tree_text,
-        config.get("defaultFormat", "text"),
+        default_format,
         result=result,
         show_size=show_size,
         show_time=show_time,
     )
 
+    # 保存内容与当前格式相同时直接复用，避免格式化两遍
+    md_content = output if default_format == "markdown" else None
+    json_content = output if default_format == "json" else None
+
     save_display_path = ""
-    if args.save or args.save_md:
-        _save_to_file(target, tree_text, result, args, show_size, show_time)
-        filename = DEFAULT_OUTPUT_FILENAME_MD if args.save_md else DEFAULT_OUTPUT_FILENAME_TXT
-        save_display_path = os.path.join(display_target, filename)
+    if args.save or args.save_md or args.save_json:
+        saved_names = _save_to_file(
+            target, tree_text, result, args, show_size, show_time, md_content, json_content
+        )
+        save_display_path = "、".join(
+            os.path.join(display_target, name) for name in saved_names
+        )
 
     return output, save_display_path
 
 
-def _save_to_file(target, tree_text, result, args, show_size, show_time):
+def _save_to_file(
+    target: str,
+    tree_text: str,
+    result,
+    args,
+    show_size: bool,
+    show_time: bool,
+    md_content: str | None = None,
+    json_content: str | None = None,
+) -> list[str]:
+    """按开关分别保存 txt / Markdown / JSON，返回实际写出的文件名列表；失败时提示并退出码 3。"""
+    def _write(filename: str, content: str):
+        save_path = os.path.join(target, filename)
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError as e:
+            logger.error("保存失败 {} -> {}: {}", filename, save_path, e)
+            if not _is_cli_mode():
+                _notify(f"保存失败：{e}")
+            else:
+                _print_err(f"保存失败：{e}")
+            _exit(3)
+        logger.info("已保存 {}", save_path)
+        saved.append(filename)
+
+    saved: list[str] = []
+    if args.save:
+        _write(DEFAULT_OUTPUT_FILENAME_TXT, tree_text)
     if args.save_md:
-        save_path = os.path.join(target, DEFAULT_OUTPUT_FILENAME_MD)
-        save_content = format_output(
-            tree_text, "markdown", result=result, show_size=show_size, show_time=show_time,
+        _write(
+            DEFAULT_OUTPUT_FILENAME_MD,
+            md_content
+            if md_content is not None
+            else format_output(
+                tree_text, "markdown", result=result,
+                show_size=show_size, show_time=show_time,
+            ),
         )
-    else:
-        save_path = os.path.join(target, DEFAULT_OUTPUT_FILENAME_TXT)
-        save_content = tree_text
-    try:
-        with open(save_path, "w", encoding="utf-8") as f:
-            f.write(save_content)
-    except OSError as e:
-        if not _is_cli_mode():
-            _notify(f"保存失败：{e}")
-        else:
-            _print_err(f"保存失败：{e}")
-        _exit(3)
+    if args.save_json:
+        _write(
+            DEFAULT_OUTPUT_FILENAME_JSON,
+            json_content
+            if json_content is not None
+            else format_output(
+                tree_text, "json", result=result,
+                show_size=show_size, show_time=show_time,
+            ),
+        )
+    return saved
 
 
 def _copy_and_output(result, output, args, config_warnings, save_display_path=""):

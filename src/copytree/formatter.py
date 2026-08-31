@@ -1,4 +1,4 @@
-"""输出格式化：纯文本、Markdown、Markdown 列表和 JSON。"""
+"""输出格式化：纯文本、Markdown、Markdown 列表、JSON、路径/文件名列表和统计摘要。"""
 
 import datetime
 import json
@@ -63,6 +63,57 @@ def format_json(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def format_paths(result: ScanResult) -> str:
+    """每行一个文件绝对路径（剥离长路径前缀），供脚本批量使用。"""
+    return "\n".join(
+        strip_long_prefix(entry.path) for entry in _iter_files(result.root) if entry.path
+    )
+
+
+def format_names(result: ScanResult) -> str:
+    """每行一个文件名。"""
+    return "\n".join(entry.name for entry in _iter_files(result.root))
+
+
+def format_summary(result: ScanResult) -> str:
+    """一段统计摘要：文件数、目录数、总大小，截断时附加说明。"""
+    text = f"{result.root.name}：{result.total_files} 个文件，{result.total_dirs} 个文件夹"
+    total_size = _total_size(result.root)
+    if total_size:
+        text += f"，总大小 {_format_size(total_size)}"
+    if result.truncated:
+        text += f"（已截断：{describe_truncation(result)}）"
+    return text
+
+
+def _iter_files(entry: TreeEntry):
+    """深度优先遍历出所有文件条目，跳过截断标记与无权限目录。"""
+    if entry.is_marker:
+        return
+    if entry.is_dir:
+        if entry.access_denied:
+            return
+        for child in entry.children:
+            yield from _iter_files(child)
+    else:
+        yield entry
+
+
+def _total_size(root: TreeEntry) -> int:
+    """统计显示范围内文件大小总和（字节）；大小未知（st 读取失败）的文件不计。"""
+    total = 0
+    stack = list(root.children)
+    while stack:
+        entry = stack.pop()
+        if entry.is_marker or entry.access_denied:
+            continue
+        if entry.is_dir:
+            stack.extend(entry.children)
+        elif entry.size:
+            total += entry.size
+    return total
+
+
 def _format_text_wrapper(tree_text: str, **kwargs) -> str:
     return format_text(tree_text)
 
@@ -83,12 +134,36 @@ def _format_json_wrapper(tree_text: str, result=None, show_size=False, show_time
     return format_json(result, show_size, show_time)
 
 
+def _format_paths_wrapper(tree_text: str, result=None, **kwargs) -> str:
+    if result is None:
+        return tree_text
+    return format_paths(result)
+
+
+def _format_names_wrapper(tree_text: str, result=None, **kwargs) -> str:
+    if result is None:
+        return tree_text
+    return format_names(result)
+
+
+def _format_summary_wrapper(tree_text: str, result=None, **kwargs) -> str:
+    if result is None:
+        return tree_text
+    return format_summary(result)
+
+
 _FORMATTERS = {
     "text": _format_text_wrapper,
     "markdown": _format_markdown_wrapper,
     "markdown-list": _format_markdown_list_wrapper,
     "json": _format_json_wrapper,
+    "paths": _format_paths_wrapper,
+    "names": _format_names_wrapper,
+    "summary": _format_summary_wrapper,
 }
+
+# 合法格式由分发表派生，避免多处手工同步
+VALID_FORMATS = tuple(_FORMATTERS)
 
 
 def format_output(
@@ -98,8 +173,11 @@ def format_output(
     show_size: bool = False,
     show_time: bool = False,
 ) -> str:
-    """根据格式类型分发格式化。"""
-    formatter = _FORMATTERS.get(fmt, _format_text_wrapper)
+    """根据格式类型分发格式化。未知格式回退 text 并告警。"""
+    formatter = _FORMATTERS.get(fmt)
+    if formatter is None:
+        logger.warning("未知输出格式 '{}'，回退为 text", fmt)
+        formatter = _format_text_wrapper
     return formatter(tree_text, result=result, show_size=show_size, show_time=show_time)
 
 
@@ -137,12 +215,12 @@ def _entry_to_dict(entry: TreeEntry, show_size: bool, show_time: bool) -> dict:
         "type": "directory" if entry.is_dir else "file",
     }
     if entry.path:
-        item["path"] = _strip_long_prefix(entry.path)
+        item["path"] = strip_long_prefix(entry.path)
     if entry.access_denied:
         item["accessDenied"] = True
     if show_time and entry.mtime is not None:
         item["modifiedTime"] = _format_json_time(entry.mtime)
-    if not entry.is_dir and show_size:
+    if not entry.is_dir and show_size and entry.size is not None:
         item["sizeBytes"] = entry.size
     if entry.is_dir:
         item["children"] = [
@@ -156,15 +234,6 @@ def _entry_name(entry: TreeEntry) -> str:
         return entry.name
     name = os.path.basename(entry.path.rstrip("/\\"))
     return name or entry.name
-
-
-def _strip_long_prefix(path: str) -> str:
-    """Strip long-path prefixes so JSON path matches text output."""
-    if path.startswith("\\\\?\\UNC\\"):
-        return "\\\\" + path[8:]
-    if path.startswith("\\\\?\\"):
-        return path[4:]
-    return path
 
 
 def _format_json_time(timestamp: float) -> str:

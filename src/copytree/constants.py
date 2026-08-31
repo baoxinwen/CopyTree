@@ -61,9 +61,11 @@ SOURCE_CODE_FILENAMES = frozenset({
 # ── 默认输出文件名 ──
 DEFAULT_OUTPUT_FILENAME_TXT = "directory_tree.txt"
 DEFAULT_OUTPUT_FILENAME_MD = "directory_tree.md"
+DEFAULT_OUTPUT_FILENAME_JSON = "directory_tree.json"
 GENERATED_OUTPUT_FILENAMES = frozenset({
     DEFAULT_OUTPUT_FILENAME_TXT,
     DEFAULT_OUTPUT_FILENAME_MD,
+    DEFAULT_OUTPUT_FILENAME_JSON,
 })
 
 # ── 树状符号 ──

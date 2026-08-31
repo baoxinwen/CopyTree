@@ -12,6 +12,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from copytree.formatter import format_output  # noqa: E402
 from copytree.scanner import build_tree_text, scan_directory  # noqa: E402
 
+from loguru import logger as _quiet_logger  # noqa: E402
+
+_quiet_logger.remove()  # 保持测试输出干净
+
 
 class FormatterTests(unittest.TestCase):
     def setUp(self):
@@ -98,6 +102,21 @@ class FormatterTests(unittest.TestCase):
         child = payload["root"]["children"][0]
         self.assertIn("modifiedTime", child)
         self.assertRegex(child["modifiedTime"], r"[+-]\d{2}:\d{2}$")
+
+    def test_json_omits_size_bytes_when_unknown(self):
+        (self.tmp / "a.txt").write_text("a", encoding="utf-8")
+
+        result = scan_directory(str(self.tmp), max_files=-1, show_size=True)
+        result.root.children[0].size = None  # 模拟 stat 读取失败
+        output = format_output(
+            build_tree_text(result, show_size=True),
+            "json",
+            result=result,
+            show_size=True,
+        )
+        payload = json.loads(output)
+
+        self.assertNotIn("sizeBytes", payload["root"]["children"][0])
 
 
 if __name__ == "__main__":
