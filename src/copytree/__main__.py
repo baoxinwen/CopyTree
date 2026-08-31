@@ -82,6 +82,10 @@ class _ArgumentParser(argparse.ArgumentParser):
     def exit(self, status=0, message=None):
         if message:
             _print_err(message.rstrip("\n"))
+        if status == 2:
+            # argparse 解析错误默认退出码是 2；按规格归一为“参数错误=1”，
+            # 退出码 2 保留给剪贴板写入失败。
+            status = 1
         if status:
             _pause_if_double_clicked_cli()
         _exit(status)
