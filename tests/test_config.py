@@ -9,6 +9,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from copytree import config as config_module  # noqa: E402
 from copytree.config import _merge, get_config_warnings, load_config  # noqa: E402
 
+from loguru import logger as _quiet_logger  # noqa: E402
+
+_quiet_logger.remove()  # 保持测试输出干净
+
 
 class ConfigTests(unittest.TestCase):
     def test_rejects_non_string_list_items(self):
@@ -67,6 +71,33 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(any("maxFiles" in warning for warning in warnings))
         self.assertTrue(any("showFileSize" in warning for warning in warnings))
         self.assertTrue(any("未知配置项 unknown" in warning for warning in warnings))
+
+    def test_filter_ext_requires_dot_prefix(self):
+        from copytree.constants import SOURCE_CODE_EXTENSIONS
+
+        original_config_file = config_module.CONFIG_FILE
+        tmp = Path("test_runtime_config_ext")
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir()
+        try:
+            config_file = tmp / "copytree.json"
+            config_file.write_text(
+                '{"filterExt": [".py", "js"]}',
+                encoding="utf-8",
+            )
+            config_module.CONFIG_FILE = str(config_file)
+            try:
+                config = load_config()
+                warnings = get_config_warnings()
+            finally:
+                config_module.CONFIG_FILE = original_config_file
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp)
+
+        self.assertEqual(config["filterExt"], sorted(SOURCE_CODE_EXTENSIONS))
+        self.assertTrue(any("filterExt" in warning for warning in warnings))
 
 
 if __name__ == "__main__":
