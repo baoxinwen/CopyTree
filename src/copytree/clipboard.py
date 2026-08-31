@@ -4,15 +4,21 @@ import ctypes
 import ctypes.wintypes
 import time
 
-kernel32 = ctypes.windll.kernel32
-user32 = ctypes.windll.user32
+from loguru import logger
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002
 
-# 剪贴板重试配置
+# 剪贴板重试配置：指数退避，总等待约 0.6s，
+# 容忍剪贴板管理器（剪贴板历史、Ditto 等）短时持锁
 _CLIPBOARD_MAX_RETRIES = 3
-_CLIPBOARD_RETRY_INTERVAL = 0.1  # 秒
+_CLIPBOARD_RETRY_DELAYS = (0.15, 0.45)
+
+# 最近一次写入失败的阶段："memory"（分配/锁定共享内存）或 "busy"（打开/写入剪贴板）
+_failure_stage = "busy"
 
 # 设置正确的函数签名（64 位下必须显式设置返回类型）
 kernel32.GlobalAlloc.restype = ctypes.wintypes.HGLOBAL
@@ -35,22 +41,38 @@ user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 
 
 def copy_to_clipboard(text: str, max_retries: int = _CLIPBOARD_MAX_RETRIES) -> bool:
-    """将 Unicode 文本写入系统剪贴板。失败时重试。"""
-    for _ in range(max_retries):
+    """将 Unicode 文本写入系统剪贴板。失败时按指数退避重试。"""
+    global _failure_stage
+    for attempt in range(1, max_retries + 1):
         if _write_clipboard(text):
+            logger.debug("剪贴板写入成功 attempt={} chars={}", attempt, len(text))
             return True
-        time.sleep(_CLIPBOARD_RETRY_INTERVAL)
+        logger.debug(
+            "剪贴板写入失败 attempt={}/{} stage={} winError={}",
+            attempt, max_retries, _failure_stage, ctypes.get_last_error(),
+        )
+        if attempt < max_retries:
+            time.sleep(_CLIPBOARD_RETRY_DELAYS[min(attempt - 1, len(_CLIPBOARD_RETRY_DELAYS) - 1)])
+    logger.error("剪贴板写入最终失败，共尝试 {} 次，stage={}", max_retries, _failure_stage)
     return False
 
 
+def get_last_failure_stage() -> str:
+    """返回最近一次剪贴板写入失败的阶段："memory" 或 "busy"。"""
+    return _failure_stage
+
+
 def _write_clipboard(text: str) -> bool:
+    global _failure_stage
     data = text.encode("utf-16-le") + b"\x00\x00"
     h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
     if h_mem is None:
+        _failure_stage = "memory"
         return False
 
     ptr = kernel32.GlobalLock(h_mem)
     if ptr is None:
+        _failure_stage = "memory"
         kernel32.GlobalFree(h_mem)
         return False
 
@@ -58,6 +80,7 @@ def _write_clipboard(text: str) -> bool:
     kernel32.GlobalUnlock(h_mem)
 
     if not user32.OpenClipboard(0):
+        _failure_stage = "busy"
         kernel32.GlobalFree(h_mem)
         return False
 
@@ -69,6 +92,7 @@ def _write_clipboard(text: str) -> bool:
     user32.CloseClipboard()
 
     if result is None:
+        _failure_stage = "busy"
         kernel32.GlobalFree(h_mem)
         return False
 
